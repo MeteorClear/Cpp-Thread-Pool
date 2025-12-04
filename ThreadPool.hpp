@@ -1,36 +1,29 @@
-/*
-* ThreadPool Class
-* is thread pool that uses a priority queue to manage tasks. (header-only)
-* 
-* It created for easy multi-threading environment use.
-* By default, when a Task is pushed, an idle thread is automatically assigned and executed.
-* If necessary, you can be stopped or waited for the task to be completed.
-* 
-* require:
-* C++11 or later
-* 
-* ref:
-* https://modoocode.com/285
-*/
 #pragma once
 
-#ifndef CPP_THREAD_POOL_HPP
-#define CPP_THREAD_POOL_HPP
+#ifndef CPP_MT_THREAD_POOL_HPP
+#define CPP_MT_THREAD_POOL_HPP
 
-#include <iostream>
-#include <stdexcept>
-#include <thread>
+// Core utilities
+#include <cassert>
+#include <type_traits>
+#include <memory>
+#include <functional>
+#include <algorithm>
+
+// Containers
 #include <vector>
 #include <queue>
+
+// Concurrency
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
-#include <atomic>
-#include <algorithm>
-#include <functional>
+#include <thread>
 #include <future>
-#include <type_traits>
-#include <cassert>
-#include <memory>
+
+// I/O
+#include <stdexcept>
+#include <iostream>
 
 
 // Check C++ version
@@ -374,44 +367,4 @@ namespace mt {  // multi-threading
 
 }  // multi-threading
 
-#endif // CPP_THREAD_POOL_HPP
-
-/* Usage Example
-
-void simple_task(int id, int val) {
-    // some magic
-}
-
-int return_task(int a, int b) {
-    // some magic
-    return a + b;
-}
-
-int main() {
-    // Thread count will be automatically clamped to hardware_concurrency()
-    // You may call std::thread::hardware_concurrency() to check your system's maximum thread count.
-    ThreadPool pool(4);
-
-    // You can set priority or not.
-    pool.enqueue(simple_task, 1, 2);            // Enqueue task default priority(0)
-    pool.enqueue(-5, simple_task, 3, 5);        // Low priority(-5) (executed later)
-    pool.enqueue(8, simple_task, 5, 11);        // High priority(8) (executed earlier)
-
-    // Wait for all tasks to complete before proceeding
-    pool.wait();
-
-    // If you need to get some return value, you can get it using std::future. (also can set priority)
-    std::future<int> task_result = pool.enqueue(return_task, 3, 5);
-    task_result.wait();                         // Optional, if you need to ensure task complete
-    int result = task_result.get();             // You may get 8 int value(3 + 5)
-
-    // If you just want to stop thread running, you should use pool.pause();
-    pool.pause(); 
-    if (pool.isPaused()) pool.resume();
-
-    // This method all system terminate, you don't call enqueue
-    pool.shutdown();
-    pool.enqueue(simple_task, 1, 2);            // will throw std::runtime_error
-}
-
-*/
+#endif  // CPP_MT_THREAD_POOL_HPP
