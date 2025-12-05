@@ -33,8 +33,17 @@
 #define _THREADPOOL_CPP_VERSION __cplusplus
 #endif
 
-namespace mt {  // multi-threading
+/// @brief Multi-threading utilities namespace.
+namespace mt {
 
+    /**
+     * @brief A flexible, priority-based ThreadPool implementation.
+     *
+     * Features:
+     * - Priority scheduling (Higher integer = Higher priority).
+     * - Task submission returning std::future.
+     * - Pause/Resume functionality.
+     */
     class ThreadPool {
     public:
         using Work = std::function<void()>;
@@ -42,6 +51,7 @@ namespace mt {  // multi-threading
         //using Task = std::pair<int, Work>;  // pair: {priority, work_function}
         using Task = std::pair<int, WorkPtr>;  // pair: {priority, shared_ptr_to_work}
 
+        /// @brief Helper to determine the return type of a callable.
         template <typename F, typename... Args>
 #if _THREADPOOL_CPP_VERSION >= 201703L
         using return_type_t = typename std::invoke_result<F, Args...>::type;
@@ -49,9 +59,15 @@ namespace mt {  // multi-threading
         using return_type_t = typename std::result_of<F(Args...)>::type;
 #endif
 
+        /// @brief Default priority for tasks if not specified.
         static constexpr int DEFAULT_PRIORITY = 0;
 
-        // Constructor
+        /**
+         * @brief Construct a new Thread Pool.
+         *
+         * @param threadCount The number of worker threads to spawn.
+         *                    If 0, defaults to std::thread::hardware_concurrency().
+         */
         explicit ThreadPool(size_t threadCount = 0) {
             size_t hw = std::thread::hardware_concurrency();
             threadCount_ = (threadCount == 0 || threadCount > hw) ? hw : threadCount;
@@ -67,14 +83,28 @@ namespace mt {  // multi-threading
             assert(threads_.size() == threadCount_ && "Thread vector size mismatch.");
             assert(runningTasks_.load() == 0 && "Initial running tasks must be 0.");
         }
-        // Destructor
+        
+        /**
+         * @brief Destructor.
+         *
+         * Initiates a graceful shutdown of the thread pool.
+         */
         ~ThreadPool() noexcept {
             this->shutdown_internal(true);
         }
 
         // -------------------------------- Methods --------------------------------
 
-        // Enqueue future return task with priority
+        /**
+         * @brief Enqueues a task with a specific priority.
+         *
+         * @tparam F Type of the callable.
+         * @tparam Args Types of the arguments.
+         * @param priority Integer priority. Higher values execute sooner.
+         * @param f The callable function or task.
+         * @param args Arguments to pass to the function.
+         * @return std::future<return_type_t<F, Args...>> A future to the result of the task.
+         */
         template<class F, class... Args>
         auto enqueue(int priority, F&& f, Args&&... args)
             -> std::future<return_type_t<F, Args...>>
@@ -98,7 +128,15 @@ namespace mt {  // multi-threading
             return res;
         }
 
-        // Enqueue future return task
+        /**
+         * @brief Enqueues a task with default priority (0).
+         *
+         * @tparam F Type of the callable.
+         * @tparam Args Types of the arguments.
+         * @param f The callable function or task.
+         * @param args Arguments to pass to the function.
+         * @return std::future<return_type_t<F, Args...>> A future to the result of the task.
+         */
         template<class F, class... Args>
         auto enqueue(F&& f, Args&&... args)
             -> std::future<return_type_t<F, Args...>>
@@ -106,8 +144,12 @@ namespace mt {  // multi-threading
             return this->enqueue(DEFAULT_PRIORITY, std::forward<F>(f), std::forward<Args>(args)...);
         }
 
-        // Wait until the queue is empty and all running tasks are complete
-        // Throw exception if there is any work left in the task queue while pause state
+        /**
+         * @brief Blocks the calling thread until the queue is empty and all running tasks are complete.
+         *
+         * @throws std::runtime_error If the pool is paused while tasks are still pending.
+         * @throws std::logic_error If called from a worker thread (to prevent deadlock).
+         */
         void wait() {
             this->checkDeadlock("wait");
 
@@ -127,22 +169,30 @@ namespace mt {  // multi-threading
             assert(runningTasks_.load(std::memory_order_acquire) == 0 && "Wait finished but tasks are running.");
         }
 
-        // Pause the working of tasks
-        // Executed Tasks prior to the call are not interrupted
+        /**
+         * @brief Pauses the processing of new tasks.
+         *
+         * Tasks currently running are not interrupted.
+         */
         void pause() {
             pauseFlag_.store(true, std::memory_order_release);
             waitCV_.notify_all();
         }
 
-        // Resume the working of tasks
+        /**
+         * @brief Resumes the processing of tasks.
+         */
         void resume() {
             pauseFlag_.store(false, std::memory_order_release);
             queueCV_.notify_all();
         }
 
-        // Clear all waiting tasks from the queue
-        // Any associated std::future will receive std::future_error (broken_promise)
-        // Recommended to use after call pause()
+        /**
+         * @brief Clears all waiting tasks from the queue.
+         *
+         * @note Associated std::futures will receive a std::future_error (broken_promise).
+         * @note Recommended to call pause() before clearing the queue.
+         */
         void clearQueue() {
             std::unique_lock<std::mutex> lock(queueMutex_);
             std::priority_queue<Task, std::vector<Task>, TaskCompare> empty_queue;
@@ -154,15 +204,26 @@ namespace mt {  // multi-threading
             }
         }
 
-        // Shut down the thread pool and destroy worker threads (Graceful)
-        // New thread pool must be used to enable thread again after calling this method
+        /**
+         * @brief Shuts down the thread pool (Graceful).
+         *
+         * Waits for all pending tasks to complete before destroying threads.
+         * A new ThreadPool instance is required to restart operations after shutdown.
+         *
+         * @throws std::logic_error If called from a worker thread.
+         */
         void shutdown() {
             this->checkDeadlock("shutdown");
             shutdown_internal(false);
         }
 
-        // Shut down the thread pool and destroy worker threads
-        // Remove remained tasks and terminate
+        /**
+         * @brief Terminates the thread pool (Immediate).
+         *
+         * Discards remaining tasks in the queue and destroys threads once current tasks finish.
+         *
+         * @throws std::logic_error If called from a worker thread.
+         */
         void terminate() {
             this->checkDeadlock("terminate");
             shutdown_internal(true);
@@ -170,40 +231,57 @@ namespace mt {  // multi-threading
 
         // ----------------------------- Status & Stats -----------------------------
 
-        // Return the number of waiting task in queue
+        /**
+         * @brief Gets the number of tasks currently waiting in the queue.
+         * @return size_t Queue size.
+         */
         size_t getQueueSize() const {
             std::unique_lock<std::mutex> lock(queueMutex_);
             return taskQueue_.size();
         }
 
-        // Return the number of active threads
+        /**
+         * @brief Gets the total number of worker threads.
+         * @return size_t Thread count.
+         */
         size_t getThreadCount() const { return threadCount_; }
 
-        // Return the number of running tasks
+        /**
+         * @brief Gets the number of tasks currently being executed.
+         * @return int Number of running tasks.
+         */
         int getRunningTasks() const { return runningTasks_.load(std::memory_order_acquire); }
 
-        // Return the status of pause flag
-        // true: paused
-        // false: working
+        /**
+         * @brief Checks if the pool is paused.
+         * @return true if paused, false otherwise.
+         */
         bool isPaused() const { return pauseFlag_.load(std::memory_order_acquire); }
 
-        // Return the status of stop flag
-        // true: stopped
-        // false: active
+        /**
+         * @brief Checks if the pool has been stopped/shutdown.
+         * @return true if stopped, false otherwise.
+         */
         bool isStopped() const {
             return stopFlag_.load(std::memory_order_acquire);
         }
 
     private:
 
-        // Comparator for the priority queue, compares only the first element(int priority)
+        /// @brief Comparator for the priority queue (Max Heap based on priority int).
         struct TaskCompare {
             bool operator()(const Task& lhs, const Task& rhs) const {
                 return lhs.first < rhs.first;
             }
         };
 
-        // Enqueue the task with specific priority into task queue
+        /**
+         * @brief Internal method to push a task onto the queue.
+         *
+         * @param priority Priority level.
+         * @param work_wrapper Shared pointer to the work function.
+         * @throws std::runtime_error If the pool is already stopped.
+         */
         inline void queueTask(int priority, WorkPtr work_wrapper) {
             assert(work_wrapper && "Attempted to enqueue an empty task.");
 
@@ -224,7 +302,12 @@ namespace mt {  // multi-threading
             }
         }
 
-        // Check deadlock by checking if calling self thread
+        /**
+         * @brief Checks if the current thread is a worker thread to prevent deadlocks.
+         *
+         * @param callerName Name of the calling function for error reporting.
+         * @throws std::logic_error If called from a worker thread.
+         */
         void checkDeadlock(const char* callerName) {
             const std::thread::id this_id = std::this_thread::get_id();
             bool is_worker = false;
@@ -248,8 +331,11 @@ namespace mt {  // multi-threading
             }
         }
 
-        // Shut down the thread pool and destroy worker threads
-        // If immediate is true, clear task queue 
+        /**
+         * @brief Internal shutdown logic.
+         *
+         * @param immediate If true, clears the task queue immediately. If false, waits for queue to empty.
+         */
         void shutdown_internal(bool immediate) {
             {   // Lock
                 std::unique_lock<std::mutex> lock(queueMutex_);
@@ -283,7 +369,11 @@ namespace mt {  // multi-threading
             threads_.clear();
         }
 
-        // Main loop for each worker thread
+        /**
+         * @brief The main loop executed by worker threads.
+         *
+         * Continously fetches and executes tasks from the queue.
+         */
         void workerLoop() {
             while (true) {
                 //Work work;
@@ -350,19 +440,19 @@ namespace mt {  // multi-threading
         }
 
     private:
-        std::atomic<bool> stopFlag_{ false };       // Signals workers to terminate permanently
-        std::atomic<bool> pauseFlag_{ false };      // Signals workers to temporarily stop consuming tasks
-        std::atomic<int> runningTasks_{ 0 };        // Counter for currently executing tasks
+        std::atomic<bool> stopFlag_{ false };       ///< Signals workers to terminate permanently
+        std::atomic<bool> pauseFlag_{ false };      ///< Signals workers to temporarily stop consuming tasks
+        std::atomic<int> runningTasks_{ 0 };        ///< Counter for currently executing tasks
 
-        size_t threadCount_ = 0;                    // Target number of worker threads
-        std::vector<std::thread> threads_;          // Container for worker threads
+        size_t threadCount_ = 0;                    ///< Target number of worker threads
+        std::vector<std::thread> threads_;          ///< Container for worker threads
 
         // Priority queue of tasks, sort by priority
         std::priority_queue<Task, std::vector<Task>, TaskCompare> taskQueue_;
 
-        mutable std::mutex queueMutex_;             // Mutex to protect the task queue
-        std::condition_variable queueCV_;           // CV to signal workers when a new task arrives (or shutdown)
-        std::condition_variable waitCV_;            // CV to signal threads waiting on wait() when the pool becomes idle
+        mutable std::mutex queueMutex_;             ///< Mutex to protect the task queue
+        std::condition_variable queueCV_;           ///< CV to signal workers when a new task arrives (or shutdown)
+        std::condition_variable waitCV_;            ///< CV to signal threads waiting on wait() when the pool becomes idle
     };  // class end
 
 }  // multi-threading
