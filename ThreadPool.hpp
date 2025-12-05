@@ -9,6 +9,7 @@
 #include <memory>
 #include <functional>
 #include <algorithm>
+#include <utility>
 
 // Containers
 #include <vector>
@@ -68,20 +69,20 @@ namespace mt {
          * @param threadCount The number of worker threads to spawn.
          *                    If 0, defaults to std::thread::hardware_concurrency().
          */
-        explicit ThreadPool(size_t threadCount = 0) {
+        explicit inline ThreadPool(size_t threadCount = 0) {
             size_t hw = std::thread::hardware_concurrency();
-            threadCount_ = (threadCount == 0 || threadCount > hw) ? hw : threadCount;
-            threadCount_ = std::max(threadCount_, size_t{ 1 });
+            this->threadCount_ = (threadCount == 0 || threadCount > hw) ? hw : threadCount;
+            this->threadCount_ = std::max(this->threadCount_, size_t{ 1 });
 
-            threads_.reserve(threadCount_);
+            this->threads_.reserve(this->threadCount_);
 
             // Start worker threads
-            for (size_t i = 0; i < threadCount_; ++i) {
-                threads_.emplace_back(&ThreadPool::workerLoop, this);
+            for (size_t i = 0; i < this->threadCount_; ++i) {
+                this->threads_.emplace_back(&ThreadPool::workerLoop, this);
             }
 
-            assert(threads_.size() == threadCount_ && "Thread vector size mismatch.");
-            assert(runningTasks_.load() == 0 && "Initial running tasks must be 0.");
+            assert(this->threads_.size() == this->threadCount_ && "Thread vector size mismatch.");
+            assert(this->runningTasks_.load() == 0 && "Initial running tasks must be 0.");
         }
         
         /**
@@ -89,7 +90,7 @@ namespace mt {
          *
          * Initiates a graceful shutdown of the thread pool.
          */
-        ~ThreadPool() noexcept {
+        inline ~ThreadPool() noexcept {
             this->shutdown_internal(true);
         }
 
@@ -106,7 +107,7 @@ namespace mt {
          * @return std::future<return_type_t<F, Args...>> A future to the result of the task.
          */
         template<class F, class... Args>
-        auto enqueue(int priority, F&& f, Args&&... args)
+        inline auto enqueue(int priority, F&& f, Args&&... args)
             -> std::future<return_type_t<F, Args...>>
         {
             using ResultType = return_type_t<F, Args...>;
@@ -138,7 +139,7 @@ namespace mt {
          * @return std::future<return_type_t<F, Args...>> A future to the result of the task.
          */
         template<class F, class... Args>
-        auto enqueue(F&& f, Args&&... args)
+        inline auto enqueue(F&& f, Args&&... args)
             -> std::future<return_type_t<F, Args...>>
         {
             return this->enqueue(DEFAULT_PRIORITY, std::forward<F>(f), std::forward<Args>(args)...);
@@ -150,23 +151,23 @@ namespace mt {
          * @throws std::runtime_error If the pool is paused while tasks are still pending.
          * @throws std::logic_error If called from a worker thread (to prevent deadlock).
          */
-        void wait() {
+        inline void wait() {
             this->checkDeadlock("wait");
 
             std::unique_lock<std::mutex> lock(queueMutex_);
 
-            waitCV_.wait(lock, [this]() {
-                bool isDone = taskQueue_.empty() && (runningTasks_.load(std::memory_order_acquire) == 0);
-                bool isBlockedByPause = !taskQueue_.empty() && pauseFlag_.load(std::memory_order_acquire);
+            this->waitCV_.wait(lock, [this]() {
+                bool isDone = this->taskQueue_.empty() && (this->runningTasks_.load(std::memory_order_acquire) == 0);
+                bool isBlockedByPause = !this->taskQueue_.empty() && this->pauseFlag_.load(std::memory_order_acquire);
                 return isDone || isBlockedByPause;
                 });
 
-            if (pauseFlag_.load(std::memory_order_acquire) && !taskQueue_.empty()) {
+            if (this->pauseFlag_.load(std::memory_order_acquire) && !this->taskQueue_.empty()) {
                 throw std::runtime_error("ThreadPool is paused with pending tasks.");
             }
 
-            assert(taskQueue_.empty() && "Wait finished but queue is not empty.");
-            assert(runningTasks_.load(std::memory_order_acquire) == 0 && "Wait finished but tasks are running.");
+            assert(this->taskQueue_.empty() && "Wait finished but queue is not empty.");
+            assert(this->runningTasks_.load(std::memory_order_acquire) == 0 && "Wait finished but tasks are running.");
         }
 
         /**
@@ -174,17 +175,17 @@ namespace mt {
          *
          * Tasks currently running are not interrupted.
          */
-        void pause() {
-            pauseFlag_.store(true, std::memory_order_release);
-            waitCV_.notify_all();
+        inline void pause() {
+            this->pauseFlag_.store(true, std::memory_order_release);
+            this->waitCV_.notify_all();
         }
 
         /**
          * @brief Resumes the processing of tasks.
          */
-        void resume() {
-            pauseFlag_.store(false, std::memory_order_release);
-            queueCV_.notify_all();
+        inline void resume() {
+            this->pauseFlag_.store(false, std::memory_order_release);
+            this->queueCV_.notify_all();
         }
 
         /**
@@ -193,14 +194,14 @@ namespace mt {
          * @note Associated std::futures will receive a std::future_error (broken_promise).
          * @note Recommended to call pause() before clearing the queue.
          */
-        void clearQueue() {
-            std::unique_lock<std::mutex> lock(queueMutex_);
+        inline void clearQueue() {
+            std::unique_lock<std::mutex> lock(this->queueMutex_);
             std::priority_queue<Task, std::vector<Task>, TaskCompare> empty_queue;
-            taskQueue_.swap(empty_queue);
+            this->taskQueue_.swap(empty_queue);
 
             // If no tasks are running, notify wait calls that the pool is idle
-            if (runningTasks_.load(std::memory_order_acquire) == 0) {
-                waitCV_.notify_all();
+            if (this->runningTasks_.load(std::memory_order_acquire) == 0) {
+                this->waitCV_.notify_all();
             }
         }
 
@@ -212,9 +213,9 @@ namespace mt {
          *
          * @throws std::logic_error If called from a worker thread.
          */
-        void shutdown() {
+        inline void shutdown() {
             this->checkDeadlock("shutdown");
-            shutdown_internal(false);
+            this->shutdown_internal(false);
         }
 
         /**
@@ -224,9 +225,9 @@ namespace mt {
          *
          * @throws std::logic_error If called from a worker thread.
          */
-        void terminate() {
+        inline void terminate() {
             this->checkDeadlock("terminate");
-            shutdown_internal(true);
+            this->shutdown_internal(true);
         }
 
         // ----------------------------- Status & Stats -----------------------------
@@ -235,42 +236,48 @@ namespace mt {
          * @brief Gets the number of tasks currently waiting in the queue.
          * @return size_t Queue size.
          */
-        size_t getQueueSize() const {
-            std::unique_lock<std::mutex> lock(queueMutex_);
-            return taskQueue_.size();
+        inline size_t getQueueSize() const {
+            std::unique_lock<std::mutex> lock(this->queueMutex_);
+            return this->taskQueue_.size();
         }
 
         /**
          * @brief Gets the total number of worker threads.
          * @return size_t Thread count.
          */
-        size_t getThreadCount() const { return threadCount_; }
+        inline size_t getThreadCount() const { return this->threadCount_; }
 
         /**
          * @brief Gets the number of tasks currently being executed.
          * @return int Number of running tasks.
          */
-        int getRunningTasks() const { return runningTasks_.load(std::memory_order_acquire); }
+        inline int getRunningTasks() const { return this->runningTasks_.load(std::memory_order_acquire); }
 
         /**
          * @brief Checks if the pool is paused.
          * @return true if paused, false otherwise.
          */
-        bool isPaused() const { return pauseFlag_.load(std::memory_order_acquire); }
+        inline bool isPaused() const { return this->pauseFlag_.load(std::memory_order_acquire); }
 
         /**
          * @brief Checks if the pool has been stopped/shutdown.
          * @return true if stopped, false otherwise.
          */
-        bool isStopped() const {
-            return stopFlag_.load(std::memory_order_acquire);
+        inline bool isStopped() const {
+            return this->stopFlag_.load(std::memory_order_acquire);
         }
+
+        /// @brief Delete copy constructor (Forbidden).
+        ThreadPool(const ThreadPool&) = delete;
+
+        /// @brief Delete copy assignment operator (Forbidden).
+        ThreadPool& operator=(const ThreadPool&) = delete;
 
     private:
 
         /// @brief Comparator for the priority queue (Max Heap based on priority int).
         struct TaskCompare {
-            bool operator()(const Task& lhs, const Task& rhs) const {
+            inline bool operator()(const Task& lhs, const Task& rhs) const {
                 return lhs.first < rhs.first;
             }
         };
@@ -286,19 +293,19 @@ namespace mt {
             assert(work_wrapper && "Attempted to enqueue an empty task.");
 
             {   // Lock
-                std::unique_lock<std::mutex> lock(queueMutex_);
+                std::unique_lock<std::mutex> lock(this->queueMutex_);
 
                 // shutdown status
-                if (stopFlag_.load(std::memory_order_acquire)) {
+                if (this->stopFlag_.load(std::memory_order_acquire)) {
                     throw std::runtime_error("Cannot enqueue task: ThreadPool is shut down.");
                 }
 
-                taskQueue_.emplace(priority, std::move(work_wrapper));
+                this->taskQueue_.emplace(priority, std::move(work_wrapper));
             }   // Unlock
 
             // Notify one waiting worker
-            if (!pauseFlag_.load(std::memory_order_acquire)) {
-                queueCV_.notify_one();
+            if (!this->pauseFlag_.load(std::memory_order_acquire)) {
+                this->queueCV_.notify_one();
             }
         }
 
@@ -308,11 +315,11 @@ namespace mt {
          * @param callerName Name of the calling function for error reporting.
          * @throws std::logic_error If called from a worker thread.
          */
-        void checkDeadlock(const char* callerName) {
+        inline void checkDeadlock(const char* callerName) {
             const std::thread::id this_id = std::this_thread::get_id();
             bool is_worker = false;
 
-            for (const auto& t : threads_) {
+            for (const auto& t : this->threads_) {
                 if (t.get_id() == this_id) {
                     is_worker = true;
                     break;
@@ -336,27 +343,27 @@ namespace mt {
          *
          * @param immediate If true, clears the task queue immediately. If false, waits for queue to empty.
          */
-        void shutdown_internal(bool immediate) {
+        inline void shutdown_internal(bool immediate) {
             {   // Lock
-                std::unique_lock<std::mutex> lock(queueMutex_);
+                std::unique_lock<std::mutex> lock(this->queueMutex_);
 
-                if (stopFlag_.load(std::memory_order_acquire)) return;
+                if (this->stopFlag_.load(std::memory_order_acquire)) return;
 
-                stopFlag_.store(true, std::memory_order_release);
-                pauseFlag_.store(false, std::memory_order_release);
+                this->stopFlag_.store(true, std::memory_order_release);
+                this->pauseFlag_.store(false, std::memory_order_release);
 
                 if (immediate) {  // Clear task queue
                     std::priority_queue<Task, std::vector<Task>, TaskCompare> empty;
-                    std::swap(taskQueue_, empty);
+                    std::swap(this->taskQueue_, empty);
                 }
             }   // Unlock
 
-            queueCV_.notify_all();
-            waitCV_.notify_all();
+            this->queueCV_.notify_all();
+            this->waitCV_.notify_all();
 
             auto this_id = std::this_thread::get_id();
 
-            for (auto& t : threads_) {
+            for (auto& t : this->threads_) {
                 if (t.joinable()) {
                     if (t.get_id() == this_id) {  // Joining self thread cause deadlock
                         t.detach();
@@ -366,7 +373,7 @@ namespace mt {
                     }
                 }
             }
-            threads_.clear();
+            this->threads_.clear();
         }
 
         /**
@@ -374,36 +381,36 @@ namespace mt {
          *
          * Continously fetches and executes tasks from the queue.
          */
-        void workerLoop() {
+        inline void workerLoop() {
             while (true) {
                 //Work work;
                 WorkPtr work_ptr;
 
                 {   // Lock
-                    std::unique_lock<std::mutex> lock(queueMutex_);
+                    std::unique_lock<std::mutex> lock(this->queueMutex_);
 
                     // Wait condition
-                    queueCV_.wait(lock, [&]() {
-                        return stopFlag_.load(std::memory_order_acquire) || (!pauseFlag_.load(std::memory_order_acquire) && !taskQueue_.empty());
+                    this->queueCV_.wait(lock, [this]() {
+                        return this->stopFlag_.load(std::memory_order_acquire) || (!this->pauseFlag_.load(std::memory_order_acquire) && !this->taskQueue_.empty());
                         });
 
                     // Exit condition
-                    if (stopFlag_.load(std::memory_order_acquire) && taskQueue_.empty()) { return; }
+                    if (this->stopFlag_.load(std::memory_order_acquire) && this->taskQueue_.empty()) { return; }
 
                     // Pause condition
-                    if (pauseFlag_.load(std::memory_order_acquire)) { continue; }
+                    if (this->pauseFlag_.load(std::memory_order_acquire)) { continue; }
 
-                    if (!taskQueue_.empty()) {
+                    if (!this->taskQueue_.empty()) {
                         //work = std::move(taskQueue_.top().second);  // std::move const warning, taskQueue_.top().second is const Work& type
                         //work = taskQueue_.top().second;  // copy is heavy
                         //work = std::move(const_cast<Work&>(taskQueue_.top().second));  // const_cast risk
-                        work_ptr = taskQueue_.top().second;
-                        taskQueue_.pop();
+                        work_ptr = this->taskQueue_.top().second;
+                        this->taskQueue_.pop();
 
                         //assert(work && "Popped empty task from queue.");
                         assert(work_ptr && "Popped empty task from queue.");
 
-                        runningTasks_.fetch_add(1, std::memory_order_release);
+                        this->runningTasks_.fetch_add(1, std::memory_order_release);
                     }
                     else { continue; }
                 }   // Unlock
@@ -423,16 +430,16 @@ namespace mt {
                 }
 
                 {   // Lock
-                    std::unique_lock<std::mutex> lock(queueMutex_);
+                    std::unique_lock<std::mutex> lock(this->queueMutex_);
 
-                    int prevCount = runningTasks_.fetch_sub(1, std::memory_order_release);
+                    int prevCount = this->runningTasks_.fetch_sub(1, std::memory_order_release);
                     assert(prevCount > 0 && "Running tasks count underflow");
 
                     // Decrement running task count
                     // If this was the last running task, check if we need to notify wait
                     if (prevCount == 1) {
-                        if (taskQueue_.empty()) {
-                            waitCV_.notify_all();  // Notify waiting threads (pool is idle)
+                        if (this->taskQueue_.empty()) {
+                            this->waitCV_.notify_all();  // Notify waiting threads (pool is idle)
                         }
                     }
                 }   // Unlock
